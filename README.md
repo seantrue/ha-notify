@@ -113,11 +113,31 @@ trace in cron mail is noise.
 
 ## Example: cron
 
+Cron does not read `.bashrc`, so the token has to reach the job some other way. Either `cd`
+into a directory containing a `.env`:
+
 ```cron
-0 3 * * * cd /srv/backup && ./nightly.sh 2>&1 || ha-notify -c "nightly backup failed"
+0 3 * * * cd /srv/backup && ./nightly.sh || ha-notify -c "nightly backup failed"
 ```
 
-`cd` into a directory containing `.env` and the token is picked up automatically.
+...or keep the configuration in a mode-`600` file and source it, which avoids putting a
+long-lived token in a world-readable `.bashrc`:
+
+```sh
+# ~/.config/ha-notify/env   (chmod 600)
+export HA_TOKEN=eyJhbGciOi...
+export HA_URL=http://homeassistant.lan:8123
+export HA_NOTIFY_TARGET=mobile_app_alex_s_iphone
+```
+
+```cron
+0 3 * * * . $HOME/.config/ha-notify/env; /srv/backup/nightly.sh || $HOME/.local/bin/ha-notify -c "nightly backup failed"
+```
+
+Use an absolute path to `ha-notify`: cron's `PATH` usually excludes `~/.local/bin`. Sourcing
+the same file from `~/.bashrc` gives interactive shells the same configuration.
+
+Without either, the command exits `2` with `HA_TOKEN not set`, rather than failing silently.
 
 ## Development
 

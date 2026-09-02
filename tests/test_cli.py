@@ -1,0 +1,264 @@
+import json
+import os
+
+import httpx
+import pytest
+
+from ha_notify import cli
+
+TOKEN = "test-token"
+
+
+# --- pure helpers ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "given,expected",
+    [
+        ("mobile_app_x", "mobile_app_x"),
+        ("notify.mobile_app_x", "mobile_app_x"),
+        ("notify/mobile_app_x", "mobile_app_x"),
+        # only the leading prefix is stripped
+        ("notify.a_notify.b", "a_notify.b"),
+    ],
+)
+def test_normalize_target(given, expected):
+    assert cli.normalize_target(given) == expected
+
+
+def test_build_payload_minimal():
+    assert cli.build_payload("hi") == {"message": "hi"}
+
+
+def test_build_payload_omits_empty_title():
+    assert "title" not in cli.build_payload("hi", title="")
+
+
+def test_build_payload_critical():
+    payload = cli.build_payload("hi", title="t", critical=True, sound="alarm", volume=0.5)
+    assert payload["title"] == "t"
+    assert payload["data"]["push"]["sound"] == {
+        "name": "alarm",
+        "critical": 1,
+        "volume": 0.5,
+    }
+
+
+def test_build_payload_non_critical_has_no_data():
+    assert "data" not in cli.build_payload("hi", title="t", critical=False)
+
+
+def test_default_title_is_short_hostname(monkeypatch):
+    monkeypatch.setattr(cli.socket, "gethostname", lambda: "buildhost.local")
+    assert cli.default_title() == "buildhost"
+
+
+# --- .env handling --------------------------------------------------------
+
+
+def test_load_dotenv_sets_missing_vars(tmp_path, monkeypatch):
+    env = tmp_path / ".env"
+    env.write_text('HA_TOKEN="abc"\nexport HA_URL=http://ha:8123\n# comment\n\nBAD_LINE\n')
+    monkeypatch.chdir(tmp_path)
+    assert cli.load_dotenv() == env
+    assert os.environ["HA_TOKEN"] == "abc"
+    assert os.environ["HA_URL"] == "http://ha:8123"
+
+
+def test_load_dotenv_does_not_override_real_env(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("HA_TOKEN=from-file\n")
+    monkeypatch.setenv("HA_TOKEN", "from-env")
+    monkeypatch.chdir(tmp_path)
+    cli.load_dotenv()
+    assert os.environ["HA_TOKEN"] == "from-env"
+
+
+def test_find_dotenv_walks_up(tmp_path, monkeypatch):
+    (tmp_path / ".env").write_text("HA_TOKEN=x\n")
+    nested = tmp_path / "a" / "b"
+    nested.mkdir(parents=True)
+    monkeypatch.chdir(nested)
+    assert cli.find_dotenv() == tmp_path / ".env"
+
+
+def test_find_dotenv_missing(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    assert cli.find_dotenv() is None
+
+
+# --- config / usage errors ------------------------------------------------
+
+
+def test_missing_token_is_config_error(capsys):
+    assert cli.main(["hello"]) == cli.EXIT_CONFIG
+    assert "HA_TOKEN not set" in capsys.readouterr().err
+
+
+def test_bad_volume_is_config_error(monkeypatch, capsys):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    assert cli.main(["hi", "--volume", "5"]) == cli.EXIT_CONFIG
+    assert "--volume must be between" in capsys.readouterr().err
+
+
+def test_empty_stdin_message_is_config_error(monkeypatch, capsys):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(cli.sys.stdin, "read", lambda: "   \n")
+    assert cli.main([]) == cli.EXIT_CONFIG
+    assert "message is empty" in capsys.readouterr().err
+
+
+def test_no_message_on_tty_is_config_error(monkeypatch, capsys):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: True)
+    assert cli.main([]) == cli.EXIT_CONFIG
+    assert "no message given" in capsys.readouterr().err
+
+
+def test_message_read_from_stdin(monkeypatch, capsys):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    monkeypatch.setattr(cli.sys.stdin, "isatty", lambda: False)
+    monkeypatch.setattr(cli.sys.stdin, "read", lambda: "  piped message\n")
+    assert cli.main(["-n"]) == cli.EXIT_OK
+    assert json.loads(capsys.readouterr().out.split("\n", 1)[1])["message"] == "piped message"
+
+
+# --- dry run / precedence -------------------------------------------------
+
+
+def test_dry_run_uses_defaults(monkeypatch, capsys):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    monkeypatch.setattr(cli.socket, "gethostname", lambda: "buildhost.local")
+    assert cli.main(["boom", "-n"]) == cli.EXIT_OK
+    line, body = capsys.readouterr().out.split("\n", 1)
+    assert line == f"POST {cli.DEFAULT_URL}/api/services/notify/{cli.DEFAULT_TARGET}"
+    assert json.loads(body) == {"message": "boom", "title": "buildhost"}
+
+
+def test_env_overrides_builtin_defaults(monkeypatch, capsys):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    monkeypatch.setenv("HA_URL", "http://ha.example:8123")
+    monkeypatch.setenv("HA_NOTIFY_TARGET", "mobile_app_phone")
+    assert cli.main(["boom", "-n"]) == cli.EXIT_OK
+    assert capsys.readouterr().out.splitlines()[0] == (
+        "POST http://ha.example:8123/api/services/notify/mobile_app_phone"
+    )
+
+
+def test_flag_overrides_env(monkeypatch, capsys):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    monkeypatch.setenv("HA_URL", "http://from-env:8123")
+    assert cli.main(["boom", "-n", "-u", "http://from-flag:8123/"]) == cli.EXIT_OK
+    # trailing slash stripped
+    assert capsys.readouterr().out.splitlines()[0].startswith("POST http://from-flag:8123/api/")
+
+
+def test_dotenv_reaches_url_default(tmp_path, monkeypatch, capsys):
+    """Regression: .env must load before parse_args() evaluates --url's default."""
+    (tmp_path / ".env").write_text("HA_TOKEN=abc\nHA_URL=http://from-dotenv:8123\n")
+    monkeypatch.chdir(tmp_path)
+    assert cli.main(["boom", "-n"]) == cli.EXIT_OK
+    assert capsys.readouterr().out.splitlines()[0].startswith("POST http://from-dotenv:8123/")
+
+
+def test_version(capsys):
+    from ha_notify import __version__
+
+    assert cli.main(["--version"]) == cli.EXIT_OK
+    assert capsys.readouterr().out.strip() == f"ha-notify {__version__}"
+
+
+# --- send() ---------------------------------------------------------------
+
+
+def mock_post(monkeypatch, response=None, raises=None, captured=None):
+    def fake_post(url, **kwargs):
+        if captured is not None:
+            captured["url"] = url
+            captured.update(kwargs)
+        if raises is not None:
+            raise raises
+        return response
+
+    monkeypatch.setattr(cli.httpx, "post", fake_post)
+
+
+def make_response(status_code, text="", json_body=None):
+    request = httpx.Request("POST", "http://ha/api")
+    if json_body is not None:
+        return httpx.Response(status_code, json=json_body, request=request)
+    return httpx.Response(status_code, text=text, request=request)
+
+
+def test_send_success(monkeypatch):
+    captured = {}
+    mock_post(monkeypatch, response=make_response(200, "[]"), captured=captured)
+    rc = cli.send("http://ha:8123", TOKEN, "mobile_app_x", {"message": "hi"})
+    assert rc == cli.EXIT_OK
+    assert captured["url"] == "http://ha:8123/api/services/notify/mobile_app_x"
+    assert captured["headers"]["Authorization"] == f"Bearer {TOKEN}"
+    assert captured["json"] == {"message": "hi"}
+
+
+def test_send_400_hints_at_target(monkeypatch, capsys):
+    mock_post(monkeypatch, response=make_response(400, "400: Bad Request"))
+    assert cli.send("http://ha:8123", TOKEN, "typo_target", {}) == cli.EXIT_FAILED
+    err = capsys.readouterr().err
+    assert "notify failed: 400" in err
+    assert "notify.typo_target' may not exist" in err
+
+
+def test_send_401_hints_at_token(monkeypatch, capsys):
+    mock_post(monkeypatch, response=make_response(401, "Unauthorized"))
+    assert cli.send("http://ha:8123", TOKEN, "x", {}) == cli.EXIT_FAILED
+    assert "HA_TOKEN is invalid or expired" in capsys.readouterr().err
+
+
+def test_send_unreachable_is_not_a_traceback(monkeypatch, capsys):
+    mock_post(monkeypatch, raises=httpx.ConnectTimeout("timed out"))
+    assert cli.send("http://ha:8123", TOKEN, "x", {}) == cli.EXIT_FAILED
+    assert "could not reach http://ha:8123" in capsys.readouterr().err
+
+
+def test_main_end_to_end_critical(monkeypatch):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    captured = {}
+    mock_post(monkeypatch, response=make_response(200, "[]"), captured=captured)
+    rc = cli.main(["rsync exit 23", "-t", "backup failed", "--critical", "-T", "notify.phone"])
+    assert rc == cli.EXIT_OK
+    assert captured["url"].endswith("/api/services/notify/phone")
+    assert captured["json"] == {
+        "message": "rsync exit 23",
+        "title": "backup failed",
+        "data": {"push": {"sound": {"name": "default", "critical": 1, "volume": 1.0}}},
+    }
+
+
+# --- list_targets ---------------------------------------------------------
+
+
+SERVICES_BODY = [
+    {"domain": "light", "services": {"turn_on": {}}},
+    {"domain": "notify", "services": {"mobile_app_b": {}, "mobile_app_a": {}, "lg_tv": {}}},
+]
+
+
+def test_list_targets_sorted(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cli.httpx, "get", lambda url, **kw: make_response(200, json_body=SERVICES_BODY)
+    )
+    assert cli.list_targets("http://ha:8123", TOKEN) == cli.EXIT_OK
+    assert capsys.readouterr().out.split() == [
+        "notify.lg_tv",
+        "notify.mobile_app_a",
+        "notify.mobile_app_b",
+    ]
+
+
+def test_list_targets_unreachable(monkeypatch, capsys):
+    def boom(url, **kw):
+        raise httpx.ConnectError("no route")
+
+    monkeypatch.setattr(cli.httpx, "get", boom)
+    assert cli.list_targets("http://ha:8123", TOKEN) == cli.EXIT_FAILED
+    assert "could not reach" in capsys.readouterr().err

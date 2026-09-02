@@ -54,7 +54,9 @@ default title used the full `.local` FQDN rather than the short hostname.
 ## 0.2.0: iOS interruption levels
 
 **Human.** Reported the symptom: "unless I assert a notification is critical, they do not
-arrive on my iPhone." Confirmed the fix should become the default for all sends.
+arrive on my iPhone." Confirmed the fix should become the default for all sends, and verified
+the result on the device — the only step that could confirm it, since nothing visible from the
+API side distinguishes a delivered notification from a suppressed one.
 
 **AI (Claude Code).** Identified that this was not a defect in the request payload — a plain
 send was already valid and Home Assistant was returning `200` — but an iOS delivery-priority
@@ -78,12 +80,13 @@ which does not exist on that instance. The existing `--list-targets` hint pointe
 directly, as it was designed to. `HA_NOTIFY_INTERRUPTION_LEVEL=time-sensitive` was then added
 to that file.
 
-Not yet confirmed: that a time-sensitive notification actually clears whatever is currently
-suppressing normal ones on the maintainer's phone. The send returns `0`, which means only that
-Home Assistant accepted it — arrival on the device has not been reported back. The instance
-also has two iPhone registrations (`mobile_app_alex_s_iphone` and
-`mobile_app_alex_s_iphone_15`); a stale registration remains an untested alternative
-explanation for the original symptom.
+Confirmed on the device: a non-critical send from `appserver` carrying
+`interruption-level: time-sensitive` arrived with sound. This validates the diagnosis rather
+than merely the code path — an `active` notification was being suppressed, and raising the
+interruption level was sufficient to clear it without resorting to a critical alert. It also
+rules out the competing explanation, a stale device registration: the instance has two iPhone
+registrations (`mobile_app_alex_s_iphone` and `mobile_app_alex_s_iphone_15`), and the one in
+use is demonstrably live.
 
 8 tests added (38 total), covering each interruption level, critical outranking a level, the
 environment default and the flag overriding it, and the rejected environment typo.
@@ -107,9 +110,9 @@ is entirely AI-written.
 instance, and the packaged wheel was installed into a clean environment and re-tested.
 
 0.2.0: the flag, environment default, precedence and rejected-typo paths were exercised
-against the live instance, and a time-sensitive notification was accepted by Home Assistant
-(exit `0`). Delivery to the maintainer's phone has not been confirmed back, so the fix is
-verified as far as the API boundary and no further. Not published to PyPI — released by tag
-and wheel only, installed directly on the maintainer's hosts.
+against the live instance, and end-to-end delivery was confirmed by the maintainer — a
+time-sensitive notification sent from `appserver` arrived on the phone with sound. Not
+published to PyPI — released by tag and wheel only, installed directly on the maintainer's
+hosts.
 
 Neither release has had a line-by-line human review.

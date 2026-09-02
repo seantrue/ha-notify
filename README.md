@@ -33,6 +33,7 @@ A long-lived access token is required. Create one in Home Assistant under
 | `HA_TOKEN` | Long-lived access token | *(required)* |
 | `HA_URL` | Base URL of Home Assistant | `http://homeassistant.lan:8123` |
 | `HA_NOTIFY_TARGET` | Notify service to send to | `mobile_app_iphone` |
+| `HA_NOTIFY_INTERRUPTION_LEVEL` | Default iOS delivery priority | *(the app's own setting)* |
 
 Precedence is **flag → environment → built-in default**.
 
@@ -67,7 +68,8 @@ Set the one you want as `HA_NOTIFY_TARGET`, or pass `-T`. The `notify.` prefix i
 ## Usage
 
 ```
-ha-notify [-h] [-t TITLE] [-T TARGET] [-c] [--sound SOUND] [--volume VOLUME]
+ha-notify [-h] [-t TITLE] [-T TARGET] [--interruption-level LEVEL]
+          [--time-sensitive] [-c] [--sound SOUND] [--volume VOLUME]
           [-u URL] [--timeout TIMEOUT] [-l] [-n] [--version] [message]
 ```
 
@@ -75,6 +77,8 @@ ha-notify [-h] [-t TITLE] [-T TARGET] [-c] [--sound SOUND] [--volume VOLUME]
 | --- | --- |
 | `-t`, `--title` | Notification title (default: this machine's short hostname) |
 | `-T`, `--target` | Notify service, with or without the `notify.` prefix |
+| `--interruption-level` | iOS delivery priority: `passive`, `active`, `time-sensitive` |
+| `--time-sensitive` | Shorthand for `--interruption-level time-sensitive` |
 | `-c`, `--critical` | Send as an iOS critical alert (bypasses silent / DND) |
 | `--sound`, `--volume` | Critical alert sound name and volume, `0.0`–`1.0` |
 | `-u`, `--url` | Home Assistant base URL |
@@ -91,6 +95,43 @@ $ df -h / | tail -1 | ha-notify --title "disk check"
 
 The title defaults to the machine's hostname, which is usually what you want when several
 boxes can page you.
+
+## When only critical alerts get through
+
+If `--critical` reliably reaches your phone but a plain `ha-notify` never seems to, the
+notification is almost certainly arriving and being held back on the phone, not lost in
+transit. Home Assistant returns `200` either way, so exit code `0` only means "handed to
+Apple".
+
+An ordinary notification is an `active` one, and iOS is free to hold those for a Focus mode
+or roll them into the scheduled Notification Summary. Critical alerts are exempt from all of
+that, which is why they feel like the only thing that works.
+
+`--time-sensitive` is the middle ground: it breaks through Focus modes and the summary, and
+unlike a critical alert it still respects the ringer switch and does not need the Critical
+Alerts permission enabled.
+
+```console
+$ ha-notify --time-sensitive "disk 91% full"
+```
+
+To make that the default for every call, including cron jobs, put it in the environment or
+`.env` rather than editing each call site:
+
+```sh
+HA_NOTIFY_INTERRUPTION_LEVEL=time-sensitive
+```
+
+Two things on the phone have to be right for this to take effect, both under
+**Settings → Notifications → Home Assistant**: *Allow Notifications* on, and **Time Sensitive
+Notifications** on. Check *Deliver Quietly* too — if a notification was ever swiped away with
+"Deliver Quietly", every normal alert from the app goes straight to Notification Center with
+no banner and no sound, which reads exactly like nothing arriving at all. If it is set, switch
+the app back to *Deliver Prominently*.
+
+Focus modes are configured separately: **Settings → Focus →** *(your mode)* **→ Apps**
+controls which apps may interrupt, and *Time Sensitive Notifications* has to be allowed there
+as well.
 
 ## Exit codes
 

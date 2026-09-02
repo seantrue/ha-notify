@@ -6,6 +6,7 @@ when something fails.
 
 Usage:
     ha-notify "rsync exit 23" --title "backup failed" --critical
+    ha-notify --time-sensitive "disk 91% full"    # breaks through Focus
     rsync ... || ha-notify --critical "nightly backup failed"
     some-job | ha-notify --title "job output"     # message from stdin
     ha-notify --list-targets
@@ -14,6 +15,8 @@ Configuration (flags override environment, environment overrides defaults):
     HA_URL              base URL of Home Assistant  [http://homeassistant.lan:8123]
     HA_TOKEN            long-lived access token     (required)
     HA_NOTIFY_TARGET    default notify service      [mobile_app_iphone]
+    HA_NOTIFY_INTERRUPTION_LEVEL
+                        default iOS delivery priority         [unset]
 
 If HA_TOKEN is not set, a .env file is read as a fallback (see find_dotenv), so
 cron jobs work without sourcing it first.
@@ -38,6 +41,10 @@ DEFAULT_URL = "http://homeassistant.lan:8123"
 # "Alex's iPhone" -> mobile_app_alex_s_iphone. Use --list-targets to see real names.
 DEFAULT_TARGET = "mobile_app_iphone"
 DEFAULT_TIMEOUT = 10.0
+
+# iOS interruption levels, quietest first. 'critical' is deliberately absent: it needs a
+# sound and volume as well, so it has its own --critical flag.
+INTERRUPTION_LEVELS = ("passive", "active", "time-sensitive")
 
 EXIT_OK = 0
 EXIT_FAILED = 1
@@ -83,8 +90,13 @@ def default_title():
     return socket.gethostname().split(".")[0]
 
 
-def build_payload(message, title=None, critical=False, sound="default", volume=1.0):
-    """Build the JSON body for the notify service call."""
+def build_payload(message, title=None, critical=False, sound="default", volume=1.0,
+                  interruption_level=None):
+    """Build the JSON body for the notify service call.
+
+    A critical alert already outranks every interruption level, so --critical wins if
+    both are given.
+    """
     payload = {"message": message}
     if title:
         payload["title"] = title
@@ -92,6 +104,8 @@ def build_payload(message, title=None, critical=False, sound="default", volume=1
         payload["data"] = {
             "push": {"sound": {"name": sound, "critical": 1, "volume": volume}}
         }
+    elif interruption_level:
+        payload["data"] = {"push": {"interruption-level": interruption_level}}
     return payload
 
 
@@ -164,6 +178,18 @@ def parse_args(argv):
              f"(default: $HA_NOTIFY_TARGET or {DEFAULT_TARGET})",
     )
     parser.add_argument(
+        "--interruption-level", choices=INTERRUPTION_LEVELS,
+        default=os.environ.get("HA_NOTIFY_INTERRUPTION_LEVEL"),
+        help="iOS delivery priority (default: $HA_NOTIFY_INTERRUPTION_LEVEL, else whatever "
+             "the companion app is configured for)",
+    )
+    parser.add_argument(
+        "--time-sensitive", action="store_const", const="time-sensitive",
+        dest="interruption_level",
+        help="shorthand for --interruption-level time-sensitive; breaks through Focus "
+             "modes and the notification summary without needing a critical alert",
+    )
+    parser.add_argument(
         "-c", "--critical", action="store_true",
         help="send as an iOS critical alert (bypasses silent/do-not-disturb)",
     )
@@ -219,6 +245,16 @@ def main(argv=None):
         print("--volume must be between 0.0 and 1.0", file=sys.stderr)
         return EXIT_CONFIG
 
+    # argparse enforces choices on the flag but not on a default taken from the
+    # environment, so a typo in HA_NOTIFY_INTERRUPTION_LEVEL has to be caught here.
+    if args.interruption_level and args.interruption_level not in INTERRUPTION_LEVELS:
+        print(
+            f"unknown interruption level {args.interruption_level!r} "
+            f"(expected one of: {', '.join(INTERRUPTION_LEVELS)})",
+            file=sys.stderr,
+        )
+        return EXIT_CONFIG
+
     target = normalize_target(args.target)
     payload = build_payload(
         args.message,
@@ -226,6 +262,7 @@ def main(argv=None):
         critical=args.critical,
         sound=args.sound,
         volume=args.volume,
+        interruption_level=args.interruption_level,
     )
 
     if args.dry_run:

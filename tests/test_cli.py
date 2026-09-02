@@ -48,6 +48,18 @@ def test_build_payload_non_critical_has_no_data():
     assert "data" not in cli.build_payload("hi", title="t", critical=False)
 
 
+@pytest.mark.parametrize("level", cli.INTERRUPTION_LEVELS)
+def test_build_payload_interruption_level(level):
+    payload = cli.build_payload("hi", title="t", interruption_level=level)
+    assert payload["data"] == {"push": {"interruption-level": level}}
+
+
+def test_build_payload_critical_outranks_interruption_level():
+    payload = cli.build_payload("hi", critical=True, interruption_level="passive")
+    assert "interruption-level" not in payload["data"]["push"]
+    assert payload["data"]["push"]["sound"]["critical"] == 1
+
+
 def test_default_title_is_short_hostname(monkeypatch):
     monkeypatch.setattr(cli.socket, "gethostname", lambda: "buildhost.local")
     assert cli.default_title() == "buildhost"
@@ -232,6 +244,38 @@ def test_main_end_to_end_critical(monkeypatch):
         "title": "backup failed",
         "data": {"push": {"sound": {"name": "default", "critical": 1, "volume": 1.0}}},
     }
+
+
+def test_main_end_to_end_time_sensitive(monkeypatch):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    captured = {}
+    mock_post(monkeypatch, response=make_response(200, "[]"), captured=captured)
+    rc = cli.main(["disk 91% full", "-t", "disk check", "--time-sensitive", "-T", "phone"])
+    assert rc == cli.EXIT_OK
+    assert captured["json"] == {
+        "message": "disk 91% full",
+        "title": "disk check",
+        "data": {"push": {"interruption-level": "time-sensitive"}},
+    }
+
+
+def test_interruption_level_defaults_from_environment(monkeypatch):
+    monkeypatch.setenv("HA_NOTIFY_INTERRUPTION_LEVEL", "time-sensitive")
+    args = cli.parse_args(["hi"])
+    assert args.interruption_level == "time-sensitive"
+
+
+def test_interruption_level_flag_beats_environment(monkeypatch):
+    monkeypatch.setenv("HA_NOTIFY_INTERRUPTION_LEVEL", "time-sensitive")
+    args = cli.parse_args(["hi", "--interruption-level", "passive"])
+    assert args.interruption_level == "passive"
+
+
+def test_bad_interruption_level_in_environment_is_a_config_error(monkeypatch, capsys):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    monkeypatch.setenv("HA_NOTIFY_INTERRUPTION_LEVEL", "urgent")
+    assert cli.main(["hi"]) == cli.EXIT_CONFIG
+    assert "unknown interruption level 'urgent'" in capsys.readouterr().err
 
 
 # --- list_targets ---------------------------------------------------------

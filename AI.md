@@ -51,6 +51,43 @@ after `parse_args()` had already evaluated the `--url` and `--target` defaults, 
 `HA_TOKEN` benefited from it (covered now by `test_dotenv_reaches_url_default`); and the
 default title used the full `.local` FQDN rather than the short hostname.
 
+## Unreleased: iOS interruption levels
+
+**Human.** Reported the symptom: "unless I assert a notification is critical, they do not
+arrive on my iPhone." Confirmed the fix should become the default for all sends.
+
+**AI (Claude Code).** Identified that this was not a defect in the request payload — a plain
+send was already valid and Home Assistant was returning `200` — but an iOS delivery-priority
+question. An ordinary notification is an `active` one, which iOS may hold for a Focus mode or
+the Notification Summary; a critical alert is exempt from both, so critical appeared to be the
+only thing that worked. The tool could express only those two extremes.
+
+Added `--interruption-level {passive,active,time-sensitive}` with a `--time-sensitive`
+shorthand and an `HA_NOTIFY_INTERRUPTION_LEVEL` environment default, following the existing
+flag → environment → built-in precedence. `--critical` continues to outrank it, so the two are
+safe to combine. Argparse validates `choices` on the flag but not on a default sourced from
+the environment, so a typo in `HA_NOTIFY_INTERRUPTION_LEVEL` is caught explicitly and exits
+`2` rather than being sent to Home Assistant. Documented the phone-side settings that must
+also be right (Time Sensitive enabled, app not set to Deliver Quietly, Focus per-app rules),
+since the flag alone cannot force delivery.
+
+A `400: Bad Request` seen while testing this change was environmental, not a regression: the
+maintainer's configuration lives in `~/.config/ha-notify/env`, which only interactive shells
+source, so a non-interactive invocation fell back to the built-in `mobile_app_iphone` default,
+which does not exist on that instance. The existing `--list-targets` hint pointed at the cause
+directly, as it was designed to. `HA_NOTIFY_INTERRUPTION_LEVEL=time-sensitive` was then added
+to that file.
+
+Not yet confirmed: that a time-sensitive notification actually clears whatever is currently
+suppressing normal ones on the maintainer's phone. The send returns `0`, which means only that
+Home Assistant accepted it — arrival on the device has not been reported back. The instance
+also has two iPhone registrations (`mobile_app_alex_s_iphone` and
+`mobile_app_alex_s_iphone_15`); a stale registration remains an untested alternative
+explanation for the original symptom.
+
+8 tests added (38 total), covering each interruption level, critical outranking a level, the
+environment default and the flag overriding it, and the rejected environment typo.
+
 ## Approximate LOC at 0.1.0
 
 | File | Lines | Author |
@@ -61,7 +98,8 @@ default title used the full `.local` FQDN rather than the short hostname.
 | `README.md` | 135 | AI |
 | `src/ha_notify/__init__.py` | 6 | AI |
 
-30 tests, all offline.
+30 tests, all offline. (Unreleased: `cli.py` 282, `tests/test_cli.py` 308, `README.md` 196;
+38 tests. All added lines AI-written.)
 
 ## Review status
 

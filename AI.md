@@ -51,7 +51,7 @@ after `parse_args()` had already evaluated the `--url` and `--target` defaults, 
 `HA_TOKEN` benefited from it (covered now by `test_dotenv_reaches_url_default`); and the
 default title used the full `.local` FQDN rather than the short hostname.
 
-## Unreleased: iOS interruption levels
+## 0.2.0: iOS interruption levels
 
 **Human.** Reported the symptom: "unless I assert a notification is critical, they do not
 arrive on my iPhone." Confirmed the fix should become the default for all sends.
@@ -88,21 +88,28 @@ explanation for the original symptom.
 8 tests added (38 total), covering each interruption level, critical outranking a level, the
 environment default and the flag overriding it, and the rejected environment typo.
 
-## Approximate LOC at 0.1.0
+## Approximate LOC at 0.2.0
 
 | File | Lines | Author |
 | --- | --- | --- |
-| `src/ha_notify/cli.py` | 245 | AI, from a ~25-line human prototype |
-| `tests/test_cli.py` | 264 | AI |
+| `src/ha_notify/cli.py` | 282 | AI, from a ~25-line human prototype |
+| `tests/test_cli.py` | 308 | AI |
 | `tests/conftest.py` | 12 | AI |
-| `README.md` | 135 | AI |
+| `README.md` | 196 | AI |
 | `src/ha_notify/__init__.py` | 6 | AI |
 
-30 tests, all offline. (Unreleased: `cli.py` 282, `tests/test_cli.py` 308, `README.md` 196;
-38 tests. All added lines AI-written.)
+38 tests, all offline. Growth since 0.1.0 (+37 `cli.py`, +44 tests, +61 README, +39 AI.md)
+is entirely AI-written.
 
 ## Review status
 
-All AI-written code in this release was executed and verified against a live Home Assistant
-instance, and the packaged wheel was installed into a clean environment and re-tested. The
-code has not yet had a line-by-line human review.
+0.1.0: all AI-written code was executed and verified against a live Home Assistant
+instance, and the packaged wheel was installed into a clean environment and re-tested.
+
+0.2.0: the flag, environment default, precedence and rejected-typo paths were exercised
+against the live instance, and a time-sensitive notification was accepted by Home Assistant
+(exit `0`). Delivery to the maintainer's phone has not been confirmed back, so the fix is
+verified as far as the API boundary and no further. Not published to PyPI — released by tag
+and wheel only, installed directly on the maintainer's hosts.
+
+Neither release has had a line-by-line human review.

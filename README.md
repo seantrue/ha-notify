@@ -12,11 +12,23 @@ $ rsync -a /data /backup || ha-notify --critical "nightly backup failed: rsync e
 
 ## Install
 
+This package is **not on PyPI** and is not going there — `uv tool install ha-notify` will
+fail. Install from the private repository:
+
 ```console
-$ uv tool install ha-notify          # or: pipx install ha-notify
+$ uv tool install git+ssh://git@github.com/seantrue/ha-notify.git@v0.2.0
 ```
 
-From a checkout:
+...or from a wheel built locally, which is how the maintainer's hosts are updated:
+
+```console
+$ uv build
+$ uv tool install --force dist/ha_notify-0.2.0-py3-none-any.whl
+```
+
+Note that `uv tool upgrade` cannot see a file-installed copy and will not keep it current.
+
+From a checkout, for development:
 
 ```console
 $ uv sync --extra dev

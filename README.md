@@ -16,14 +16,14 @@ This package is **not published to PyPI** — `uv tool install ha-notify` will f
 from the repository:
 
 ```console
-$ uv tool install git+https://github.com/seantrue/ha-notify.git@v0.2.0
+$ uv tool install git+https://github.com/seantrue/ha-notify.git@v0.3.0
 ```
 
 ...or from a wheel built locally, which is how the maintainer's hosts are updated:
 
 ```console
 $ uv build
-$ uv tool install --force dist/ha_notify-0.2.0-py3-none-any.whl
+$ uv tool install --force dist/ha_notify-0.3.0-py3-none-any.whl
 ```
 
 Note that `uv tool upgrade` cannot see a file-installed copy and will not keep it current.

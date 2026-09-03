@@ -91,7 +91,20 @@ use is demonstrably live.
 8 tests added (38 total), covering each interruption level, critical outranking a level, the
 environment default and the flag overriding it, and the rejected environment typo.
 
-## Unreleased: `--target all`
+## Approximate LOC at 0.2.0
+
+| File | Lines | Author |
+| --- | --- | --- |
+| `src/ha_notify/cli.py` | 282 | AI, from a ~25-line human prototype |
+| `tests/test_cli.py` | 308 | AI |
+| `tests/conftest.py` | 12 | AI |
+| `README.md` | 196 | AI |
+| `src/ha_notify/__init__.py` | 6 | AI |
+
+38 tests, all offline. Growth since 0.1.0 (+37 `cli.py`, +44 tests, +61 README, +39 AI.md)
+is entirely AI-written.
+
+## 0.3.0: `--target all`
 
 Notable as the first change where the **human wrote the implementation and the AI reviewed
 it** — the inverse of every prior entry.
@@ -143,20 +156,7 @@ earlier because it only fails on a machine that has the variable set: `conftest.
 `HA_NOTIFY_INTERRUPTION_LEVEL`, so `test_dry_run_uses_defaults` failed in the maintainer's
 own shell.
 
-## Approximate LOC at 0.2.0
-
-| File | Lines | Author |
-| --- | --- | --- |
-| `src/ha_notify/cli.py` | 282 | AI, from a ~25-line human prototype |
-| `tests/test_cli.py` | 308 | AI |
-| `tests/conftest.py` | 12 | AI |
-| `README.md` | 196 | AI |
-| `src/ha_notify/__init__.py` | 6 | AI |
-
-38 tests, all offline. Growth since 0.1.0 (+37 `cli.py`, +44 tests, +61 README, +39 AI.md)
-is entirely AI-written.
-
-## Unreleased: public-repo preparation
+## 0.3.0: public-repo preparation
 
 **Human.** Decided to make the repository public and directed the check for prior art, the
 README update, and the configuration scan.
@@ -189,7 +189,7 @@ Assistant.
 Also updated the install instructions from `git+ssh://` and "private repository" to
 `git+https://`, and added `[project.urls]` to `pyproject.toml`.
 
-## Unreleased: set-but-empty environment variables
+## 0.3.0: set-but-empty environment variables
 
 **Human.** Approved the fix after it was reported.
 
@@ -214,19 +214,19 @@ Notable as a defect that four rounds of review, 54 passing tests and a live-inst
 missed, and that surfaced immediately on actually running the shipped artifact with an
 adversarial environment.
 
-## Approximate LOC, unreleased
+## Approximate LOC at 0.3.0
 
 | File | Lines | Author |
 | --- | --- | --- |
-| `src/ha_notify/cli.py` | 356 | Mixed: human feature, AI review and rework |
-| `tests/test_cli.py` | 506 | AI |
+| `src/ha_notify/cli.py` | 366 | Mixed: human feature, AI review and rework |
+| `tests/test_cli.py` | 553 | AI |
 | `tests/conftest.py` | 18 | AI |
-| `README.md` | 239 | AI |
+| `README.md` | 266 | AI |
 | `src/ha_notify/__init__.py` | 6 | AI |
 
-54 tests, all offline. The `--target all` feature is the first human-written code in the
-package since the prototype; the AI contribution to it is review, correction and tests
-rather than authorship.
+60 tests, all offline. Growth since 0.2.0: +84 `cli.py`, +245 tests, +70 README. The
+`--target all` feature is the first human-written code in the package since the prototype;
+the AI contribution to it is review, correction and tests rather than authorship.
 
 ## Review status
 
@@ -239,10 +239,16 @@ time-sensitive notification sent from a maintainer host arrived on the phone wit
 published to PyPI — released by tag and wheel only, installed directly on the maintainer's
 hosts.
 
-Neither release has had a line-by-line human review.
-
-Unreleased: reviewed and reworked by AI, with an offline test suite. The AI verified the
+0.3.0: reviewed and reworked by AI, with an offline test suite. The AI verified the
 read-only half against the live instance — `--list-targets` returns the full service list and
 `all` expands it to the device targets, dropping the three aggregates. The maintainer
 confirmed the sending half: a real multi-device fan-out reaches the phones. As with the 0.2.0
 interruption-level work, that is the step only the maintainer's devices can perform.
+
+The set-but-empty environment fix was verified by running the published artifact directly:
+the reported repro now resolves to the built-in defaults, a blank `HA_TOKEN` still exits `2`,
+and real values still win. First release published from a public repository; the history was
+rewritten before publication to remove the maintainer's personal identifiers, and a fresh
+clone from GitHub was scanned to confirm none remain in any commit, message or tag.
+
+No release has had a line-by-line human review.

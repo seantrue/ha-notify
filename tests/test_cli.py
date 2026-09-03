@@ -98,6 +98,53 @@ def test_find_dotenv_missing(tmp_path, monkeypatch):
     assert cli.find_dotenv() is None
 
 
+# --- set-but-empty environment variables ----------------------------------
+
+
+def test_env_default_treats_empty_as_unset(monkeypatch):
+    monkeypatch.setenv("HA_NOTIFY_TARGET", "")
+    assert cli.env_default("HA_NOTIFY_TARGET", "fallback") == "fallback"
+
+
+def test_env_default_passes_through_a_real_value(monkeypatch):
+    monkeypatch.setenv("HA_NOTIFY_TARGET", "mobile_app_x")
+    assert cli.env_default("HA_NOTIFY_TARGET", "fallback") == "mobile_app_x"
+
+
+def test_env_default_missing_var_uses_fallback(monkeypatch):
+    monkeypatch.delenv("HA_NOTIFY_TARGET", raising=False)
+    assert cli.env_default("HA_NOTIFY_TARGET", "fallback") == "fallback"
+    assert cli.env_default("HA_NOTIFY_TARGET") is None
+
+
+def test_blank_target_and_url_fall_back_to_defaults(monkeypatch, capsys):
+    """Regression: a blanked line in a sourced env file must not beat the default.
+
+    `HA_NOTIFY_TARGET=` used to produce a POST to `notify/` with no target at all.
+    """
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    monkeypatch.setenv("HA_URL", "")
+    monkeypatch.setenv("HA_NOTIFY_TARGET", "")
+    assert cli.main(["hi", "-n"]) == cli.EXIT_OK
+    assert capsys.readouterr().out.splitlines()[0] == (
+        f"POST {cli.DEFAULT_URL}/api/services/notify/{cli.DEFAULT_TARGET}"
+    )
+
+
+def test_blank_interruption_level_is_not_sent(monkeypatch, capsys):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    monkeypatch.setenv("HA_NOTIFY_INTERRUPTION_LEVEL", "")
+    assert cli.main(["hi", "-n"]) == cli.EXIT_OK
+    body = json.loads(capsys.readouterr().out.split("\n", 1)[1])
+    assert "data" not in body
+
+
+def test_blank_token_is_a_config_error(monkeypatch, capsys):
+    monkeypatch.setenv("HA_TOKEN", "")
+    assert cli.main(["hi"]) == cli.EXIT_CONFIG
+    assert "HA_TOKEN not set" in capsys.readouterr().err
+
+
 # --- config / usage errors ------------------------------------------------
 
 

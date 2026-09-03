@@ -48,7 +48,7 @@ A long-lived access token is required. Create one in Home Assistant under
 | `HA_NOTIFY_INTERRUPTION_LEVEL` | Default iOS delivery priority | *(the app's own setting)* |
 | `HA_NOTIFY_ALL_EXCLUDE` | Extra services `-T all` should skip, comma-separated | *(none)* |
 
-Precedence is **flag → environment → built-in default**.
+Precedence is **flag → environment → built-in default**. A variable that is set but *empty* counts as unset, so a blanked or commented-out line in a sourced env file falls back to the default rather than overriding it with nothing.
 
 If `HA_TOKEN` is not in the environment, `ha-notify` looks for a `.env` file in the current
 directory and each parent. This is what makes it usable from cron, which starts with almost

@@ -189,6 +189,31 @@ Assistant.
 Also updated the install instructions from `git+ssh://` and "private repository" to
 `git+https://`, and added `[project.urls]` to `pyproject.toml`.
 
+## Unreleased: set-but-empty environment variables
+
+**Human.** Approved the fix after it was reported.
+
+**AI (Claude Code).** Found while smoke-testing the freshly published package from its public
+URL — not by reading the code. `os.environ.get("HA_URL", DEFAULT_URL)` returns `""` for a
+variable that is set but empty, so the built-in default was never reached:
+
+    $ HA_URL= HA_NOTIFY_TARGET= ha-notify "x" -n
+    POST /api/services/notify/
+
+This matters for the deployment shape the tool was built for. The maintainer's configuration
+is a sourced env file, and a blanked or commented-out `HA_NOTIFY_TARGET=` line in one would
+silently produce a POST to `notify/` with no target, which Home Assistant answers with the
+same bare `400: Bad Request` that motivated `--list-targets` in the first place.
+
+Added an `env_default()` helper treating set-but-empty as unset, and routed all four reads
+(`HA_URL`, `HA_NOTIFY_TARGET`, `HA_NOTIFY_INTERRUPTION_LEVEL`, `HA_TOKEN`) through it. The
+`HA_TOKEN` path already behaved correctly via a separate `if not token` check; it goes through
+the helper for consistency. 6 tests added (60 total).
+
+Notable as a defect that four rounds of review, 54 passing tests and a live-instance check all
+missed, and that surfaced immediately on actually running the shipped artifact with an
+adversarial environment.
+
 ## Approximate LOC, unreleased
 
 | File | Lines | Author |

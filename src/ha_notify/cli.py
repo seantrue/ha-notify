@@ -92,6 +92,16 @@ def load_dotenv(path=None):
     return env_file
 
 
+def env_default(name, fallback=None):
+    """Read an environment variable, treating set-but-empty as unset.
+
+    A sourced env file with a blanked line (`HA_NOTIFY_TARGET=`) otherwise beats the
+    built-in default with an empty string, and the send goes to `notify/` with no
+    target at all -- which Home Assistant answers with a bare 400.
+    """
+    return os.environ.get(name) or fallback
+
+
 def normalize_target(target):
     """Accept 'notify.foo', 'notify/foo' or 'foo' and return the bare service name."""
     return target.replace("notify.", "", 1).replace("notify/", "", 1)
@@ -228,14 +238,14 @@ def parse_args(argv):
     )
     parser.add_argument(
         "-T", "--target",
-        default=os.environ.get("HA_NOTIFY_TARGET", DEFAULT_TARGET),
+        default=env_default("HA_NOTIFY_TARGET", DEFAULT_TARGET),
         help="notify service, with or without the 'notify.' prefix; "
              f"'{ALL_TARGET}' sends to every device (see $HA_NOTIFY_ALL_EXCLUDE) "
              f"(default: $HA_NOTIFY_TARGET or {DEFAULT_TARGET})",
     )
     parser.add_argument(
         "--interruption-level", choices=INTERRUPTION_LEVELS,
-        default=os.environ.get("HA_NOTIFY_INTERRUPTION_LEVEL"),
+        default=env_default("HA_NOTIFY_INTERRUPTION_LEVEL"),
         help="iOS delivery priority (default: $HA_NOTIFY_INTERRUPTION_LEVEL, else whatever "
              "the companion app is configured for)",
     )
@@ -254,7 +264,7 @@ def parse_args(argv):
     parser.add_argument("--volume", type=float, default=1.0,
                         help="critical alert volume, 0.0-1.0 (default: 1.0)")
     parser.add_argument(
-        "-u", "--url", default=os.environ.get("HA_URL", DEFAULT_URL),
+        "-u", "--url", default=env_default("HA_URL", DEFAULT_URL),
         help=f"Home Assistant base URL (default: $HA_URL or {DEFAULT_URL})",
     )
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT,
@@ -280,7 +290,7 @@ def main(argv=None):
         return EXIT_OK
 
     args.url = args.url.rstrip("/")
-    token = os.environ.get("HA_TOKEN")
+    token = env_default("HA_TOKEN")
     if not token:
         print("HA_TOKEN not set (and no .env found)", file=sys.stderr)
         return EXIT_CONFIG

@@ -226,6 +226,14 @@ def test_send_401_hints_at_token(monkeypatch, capsys):
     assert "HA_TOKEN is invalid or expired" in capsys.readouterr().err
 
 
+def test_send_500_hints_at_the_integration(monkeypatch, capsys):
+    mock_post(monkeypatch, response=make_response(500, "Internal Server Error"))
+    assert cli.send("http://ha:8123", TOKEN, "lg_tv", {}) == cli.EXIT_FAILED
+    err = capsys.readouterr().err
+    assert "notify failed: 500" in err
+    assert "notify.lg_tv" in err
+
+
 def test_send_unreachable_is_not_a_traceback(monkeypatch, capsys):
     mock_post(monkeypatch, raises=httpx.ConnectTimeout("timed out"))
     assert cli.send("http://ha:8123", TOKEN, "x", {}) == cli.EXIT_FAILED
@@ -306,3 +314,193 @@ def test_list_targets_unreachable(monkeypatch, capsys):
     monkeypatch.setattr(cli.httpx, "get", boom)
     assert cli.list_targets("http://ha:8123", TOKEN) == cli.EXIT_FAILED
     assert "could not reach" in capsys.readouterr().err
+
+
+def test_list_targets_is_unfiltered(monkeypatch, capsys):
+    """--list-targets shows aggregates too; it is how you debug a missing target."""
+    body = [{"domain": "notify", "services": {"notify": {}, "mobile_app_a": {}}}]
+    monkeypatch.setattr(
+        cli.httpx, "get", lambda url, **kw: make_response(200, json_body=body)
+    )
+    assert cli.list_targets("http://ha:8123", TOKEN) == cli.EXIT_OK
+    assert capsys.readouterr().out.split() == ["notify.mobile_app_a", "notify.notify"]
+
+
+def test_list_targets_failure_does_not_fall_through_to_sending(monkeypatch, capsys):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    monkeypatch.setattr(cli.httpx, "get", lambda url, **kw: make_response(500, "boom"))
+    mock_post(monkeypatch, raises=AssertionError("must not send a notification"))
+    assert cli.main(["--list-targets"]) == cli.EXIT_FAILED
+    assert "could not list services: 500" in capsys.readouterr().err
+
+
+# --- --target all ---------------------------------------------------------
+
+
+def mock_get(monkeypatch, json_body=SERVICES_BODY, status_code=200):
+    monkeypatch.setattr(
+        cli.httpx, "get", lambda url, **kw: make_response(status_code, json_body=json_body)
+    )
+
+
+def test_excluded_from_all_defaults():
+    excluded = cli.excluded_from_all(env={})
+    assert excluded == set(cli.DEFAULT_ALL_EXCLUDES)
+
+
+def test_excluded_from_all_extends_from_environment():
+    env = {"HA_NOTIFY_ALL_EXCLUDE": "mobile_app_kiosk, notify.lg_tv ,"}
+    excluded = cli.excluded_from_all(env=env)
+    assert {"mobile_app_kiosk", "lg_tv"} <= excluded
+    assert set(cli.DEFAULT_ALL_EXCLUDES) <= excluded
+
+
+def test_expand_all_drops_aggregates_and_strips_prefix(monkeypatch):
+    body = [
+        {"domain": "light", "services": {"turn_on": {}}},
+        {
+            "domain": "notify",
+            "services": {
+                "mobile_app_b": {},
+                "mobile_app_a": {},
+                "notify": {},
+                "persistent_notification": {},
+                "send_message": {},
+            },
+        },
+    ]
+    mock_get(monkeypatch, json_body=body)
+    assert cli.expand_all("http://ha:8123", TOKEN) == (
+        cli.EXIT_OK,
+        ["mobile_app_a", "mobile_app_b"],
+    )
+
+
+def test_expand_all_honours_the_exclude_environment_variable(monkeypatch):
+    monkeypatch.setenv("HA_NOTIFY_ALL_EXCLUDE", "lg_tv")
+    mock_get(monkeypatch)
+    assert cli.expand_all("http://ha:8123", TOKEN) == (
+        cli.EXIT_OK,
+        ["mobile_app_a", "mobile_app_b"],
+    )
+
+
+def test_expand_all_with_no_surviving_targets_is_a_failure(monkeypatch, capsys):
+    mock_get(monkeypatch, json_body=[{"domain": "notify", "services": {"notify": {}}}])
+    assert cli.expand_all("http://ha:8123", TOKEN) == (cli.EXIT_FAILED, None)
+    assert "matched no notify services" in capsys.readouterr().err
+
+
+def test_expand_all_propagates_a_fetch_failure(monkeypatch, capsys):
+    mock_get(monkeypatch, status_code=401)
+    assert cli.expand_all("http://ha:8123", TOKEN) == (cli.EXIT_FAILED, None)
+    assert "could not list services: 401" in capsys.readouterr().err
+
+
+def test_all_sends_to_every_target(monkeypatch, capsys):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    mock_get(monkeypatch)
+    sent = []
+
+    def fake_post(url, **kwargs):
+        sent.append(url)
+        return make_response(200, "[]")
+
+    monkeypatch.setattr(cli.httpx, "post", fake_post)
+    assert cli.main(["-T", "all", "power is out"]) == cli.EXIT_OK
+    assert sent == [
+        "http://homeassistant.lan:8123/api/services/notify/lg_tv",
+        "http://homeassistant.lan:8123/api/services/notify/mobile_app_a",
+        "http://homeassistant.lan:8123/api/services/notify/mobile_app_b",
+    ]
+    assert "sent to 3 of 3 targets" in capsys.readouterr().err
+
+
+def test_notify_all_is_the_same_as_all(monkeypatch):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    mock_get(monkeypatch)
+    sent = []
+
+    def fake_post(url, **kwargs):
+        sent.append(url)
+        return make_response(200, "[]")
+
+    monkeypatch.setattr(cli.httpx, "post", fake_post)
+    assert cli.main(["-T", "notify.all", "hi"]) == cli.EXIT_OK
+    assert len(sent) == 3
+
+
+def test_all_keeps_going_after_a_failure_but_exits_nonzero(monkeypatch, capsys):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    mock_get(monkeypatch)
+    sent = []
+
+    def fake_post(url, **kwargs):
+        sent.append(url)
+        if url.endswith("mobile_app_a"):
+            return make_response(500, "Internal Server Error")
+        return make_response(200, "[]")
+
+    monkeypatch.setattr(cli.httpx, "post", fake_post)
+    assert cli.main(["-T", "all", "power is out"]) == cli.EXIT_FAILED
+    assert len(sent) == 3, "a failure must not abort the remaining targets"
+    err = capsys.readouterr().err
+    assert "notify.mobile_app_a" in err
+    assert "sent to 2 of 3 targets" in err
+
+
+def test_all_builds_the_payload_once_per_run(monkeypatch):
+    """Every target gets the same body, and the hostname is resolved once."""
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    mock_get(monkeypatch)
+    hostname_calls = []
+
+    def gethostname():
+        hostname_calls.append(1)
+        return "buildhost.local"
+
+    monkeypatch.setattr(cli.socket, "gethostname", gethostname)
+    bodies = []
+
+    def fake_post(url, **kwargs):
+        bodies.append(kwargs["json"])
+        return make_response(200, "[]")
+
+    monkeypatch.setattr(cli.httpx, "post", fake_post)
+    assert cli.main(["-T", "all", "hi"]) == cli.EXIT_OK
+    assert bodies == [{"message": "hi", "title": "buildhost"}] * 3
+    assert len(hostname_calls) == 1
+
+
+def test_all_dry_run_prints_every_target(monkeypatch, capsys):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    mock_get(monkeypatch)
+    mock_post(monkeypatch, raises=AssertionError("dry run must not send"))
+    assert cli.main(["-T", "all", "hi", "-n"]) == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert out.count("POST ") == 3
+    assert "/api/services/notify/lg_tv" in out
+
+
+def test_all_unreachable_does_not_send(monkeypatch, capsys):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+
+    def boom(url, **kw):
+        raise httpx.ConnectError("no route")
+
+    monkeypatch.setattr(cli.httpx, "get", boom)
+    mock_post(monkeypatch, raises=AssertionError("must not send a notification"))
+    assert cli.main(["-T", "all", "hi"]) == cli.EXIT_FAILED
+    assert "could not reach" in capsys.readouterr().err
+
+
+def test_all_from_the_environment(monkeypatch):
+    monkeypatch.setenv("HA_TOKEN", TOKEN)
+    monkeypatch.setenv("HA_NOTIFY_TARGET", "all")
+    mock_get(monkeypatch)
+    sent = []
+    monkeypatch.setattr(
+        cli.httpx, "post", lambda url, **kw: (sent.append(url), make_response(200, "[]"))[1]
+    )
+    assert cli.main(["hi"]) == cli.EXIT_OK
+    assert len(sent) == 3

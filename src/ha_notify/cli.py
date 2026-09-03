@@ -9,6 +9,7 @@ Usage:
     ha-notify --time-sensitive "disk 91% full"    # breaks through Focus
     rsync ... || ha-notify --critical "nightly backup failed"
     some-job | ha-notify --title "job output"     # message from stdin
+    ha-notify -T all "the power is out"           # fan out to every device
     ha-notify --list-targets
 
 Configuration (flags override environment, environment overrides defaults):
@@ -17,6 +18,8 @@ Configuration (flags override environment, environment overrides defaults):
     HA_NOTIFY_TARGET    default notify service      [mobile_app_iphone]
     HA_NOTIFY_INTERRUPTION_LEVEL
                         default iOS delivery priority         [unset]
+    HA_NOTIFY_ALL_EXCLUDE
+                        comma-separated services to skip for -T all  [unset]
 
 If HA_TOKEN is not set, a .env file is read as a fallback (see find_dotenv), so
 cron jobs work without sourcing it first.
@@ -25,6 +28,9 @@ Exit codes:
     0  notification delivered
     1  Home Assistant rejected the request or was unreachable
     2  usage / configuration error
+
+With -T all the exit code is 1 if any target failed, even if others succeeded;
+each failure is reported on stderr as it happens.
 """
 
 import argparse
@@ -41,6 +47,12 @@ DEFAULT_URL = "http://homeassistant.lan:8123"
 # "Alex's iPhone" -> mobile_app_alex_s_iphone. Use --list-targets to see real names.
 DEFAULT_TARGET = "mobile_app_iphone"
 DEFAULT_TIMEOUT = 10.0
+
+# --target all means "every phone/speaker", so skip the notify services that are
+# aggregates or not a device at all. Site-specific ones (a kiosk, a test target)
+# belong in $HA_NOTIFY_ALL_EXCLUDE rather than here.
+DEFAULT_ALL_EXCLUDES = ("notify", "persistent_notification", "send_message")
+ALL_TARGET = "all"
 
 # iOS interruption levels, quietest first. 'critical' is deliberately absent: it needs a
 # sound and volume as well, so it has its own --critical flag.
@@ -85,6 +97,15 @@ def normalize_target(target):
     return target.replace("notify.", "", 1).replace("notify/", "", 1)
 
 
+def excluded_from_all(env=None):
+    """Service names --target all should skip: the defaults plus $HA_NOTIFY_ALL_EXCLUDE."""
+    env = os.environ if env is None else env
+    extra = env.get("HA_NOTIFY_ALL_EXCLUDE", "")
+    return set(DEFAULT_ALL_EXCLUDES) | {
+        normalize_target(name.strip()) for name in extra.split(",") if name.strip()
+    }
+
+
 def default_title():
     """Short hostname, which is what you want to see on a phone at 3am."""
     return socket.gethostname().split(".")[0]
@@ -108,10 +129,8 @@ def build_payload(message, title=None, critical=False, sound="default", volume=1
         payload["data"] = {"push": {"interruption-level": interruption_level}}
     return payload
 
-
-def list_targets(url, token, timeout=DEFAULT_TIMEOUT, out=None):
-    """Print available notify services. Returns an exit code."""
-    out = out or sys.stdout
+def fetch_targets(url, token, timeout=DEFAULT_TIMEOUT):
+    """Fetch every notify service. Returns (exit code, ['notify.foo', ...] or None)."""
     try:
         r = httpx.get(
             f"{url}/api/services",
@@ -120,15 +139,45 @@ def list_targets(url, token, timeout=DEFAULT_TIMEOUT, out=None):
         )
     except httpx.HTTPError as e:
         print(f"could not reach {url}: {e}", file=sys.stderr)
-        return EXIT_FAILED
+        return EXIT_FAILED, None
     if r.status_code != 200:
         print(f"could not list services: {r.status_code} {r.text}", file=sys.stderr)
-        return EXIT_FAILED
+        return EXIT_FAILED, None
+    targets = []
     for domain in r.json():
         if domain["domain"] == "notify":
-            for service in sorted(domain["services"]):
-                print(f"notify.{service}", file=out)
+            targets.extend(f"notify.{service}" for service in sorted(domain["services"]))
+    return EXIT_OK, targets
+
+
+def list_targets(url, token, timeout=DEFAULT_TIMEOUT, out=None):
+    """Print available notify services. Returns an exit code.
+
+    Deliberately unfiltered: this is the command you run to find out why a target
+    you expected is missing, so it has to show everything Home Assistant offers.
+    """
+    out = out or sys.stdout
+    code, targets = fetch_targets(url, token, timeout)
+    if code != EXIT_OK:
+        return code
+    for target in targets:
+        print(target, file=out)
     return EXIT_OK
+
+
+def expand_all(url, token, timeout=DEFAULT_TIMEOUT):
+    """Resolve --target all to bare service names. Returns (exit code, [...] or None)."""
+    code, targets = fetch_targets(url, token, timeout)
+    if code != EXIT_OK:
+        return code, None
+    excluded = excluded_from_all()
+    targets = [t for t in (normalize_target(t) for t in targets) if t not in excluded]
+    if not targets:
+        # Sending nothing and reporting success would be the worst outcome for a
+        # cron job whose whole purpose is to shout when something broke.
+        print(f"--target {ALL_TARGET} matched no notify services", file=sys.stderr)
+        return EXIT_FAILED, None
+    return EXIT_OK, targets
 
 
 def send(url, token, target, payload, timeout=DEFAULT_TIMEOUT):
@@ -156,6 +205,12 @@ def send(url, token, target, payload, timeout=DEFAULT_TIMEOUT):
         )
     elif r.status_code == 401:
         print("hint: HA_TOKEN is invalid or expired", file=sys.stderr)
+    elif r.status_code == 500:
+        print(
+            f"hint: Home Assistant errored delivering to 'notify.{target}'; the "
+            "integration behind it may be offline",
+            file=sys.stderr,
+        )
     return EXIT_FAILED
 
 
@@ -174,7 +229,8 @@ def parse_args(argv):
     parser.add_argument(
         "-T", "--target",
         default=os.environ.get("HA_NOTIFY_TARGET", DEFAULT_TARGET),
-        help="notify service, with or without the 'notify.' prefix "
+        help="notify service, with or without the 'notify.' prefix; "
+             f"'{ALL_TARGET}' sends to every device (see $HA_NOTIFY_ALL_EXCLUDE) "
              f"(default: $HA_NOTIFY_TARGET or {DEFAULT_TARGET})",
     )
     parser.add_argument(
@@ -254,8 +310,16 @@ def main(argv=None):
             file=sys.stderr,
         )
         return EXIT_CONFIG
-
+    # 'all' is matched after normalizing, so 'notify.all' means the same thing. It
+    # shadows any real service actually named 'all'.
     target = normalize_target(args.target)
+    if target == ALL_TARGET:
+        code, targets = expand_all(args.url, token, args.timeout)
+        if code != EXIT_OK:
+            return code
+    else:
+        targets = [target]
+
     payload = build_payload(
         args.message,
         title=args.title if args.title is not None else default_title(),
@@ -265,12 +329,22 @@ def main(argv=None):
         interruption_level=args.interruption_level,
     )
 
-    if args.dry_run:
-        print(f"POST {args.url}/api/services/notify/{target}")
-        print(json.dumps(payload, indent=2))
-        return EXIT_OK
-
-    return send(args.url, token, target, payload, args.timeout)
+    worst = EXIT_OK
+    delivered = 0
+    for target in targets:
+        if args.dry_run:
+            print(f"POST {args.url}/api/services/notify/{target}")
+            print(json.dumps(payload, indent=2))
+            result = EXIT_OK
+        else:
+            result = send(args.url, token, target, payload, args.timeout)
+        if result == EXIT_OK:
+            delivered += 1
+        else:
+            worst = result
+    if len(targets) > 1:
+        print(f"sent to {delivered} of {len(targets)} targets", file=sys.stderr)
+    return worst
 
 
 def run():

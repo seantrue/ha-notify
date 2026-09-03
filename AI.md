@@ -1,5 +1,7 @@
 # AI Contributions
 
+*About AI slop.* This code is the result of a set of conversations between the human author and Claude Code. Does that make it slop? Is instant ramen slop? Sure, and it has also kept a lot of people fed. But you don't have to take the analogy on faith — the rest of this file is a line-by-line accounting of who did what, including two defects in AI-written code that testing caught before they shipped. Read it and decide. Bon appétit, but mind the sodium content.
+
 Tracks the split between the human maintainer and AI assistants (Claude Code) for this
 project. Updated whenever a commit message is written.
 
@@ -252,3 +254,14 @@ rewritten before publication to remove the maintainer's personal identifiers, an
 clone from GitHub was scanned to confirm none remain in any commit, message or tag.
 
 No release has had a line-by-line human review.
+
+## The note at the top
+
+**Human.** Wrote the original preface — the argument, the soup comparison and the sodium
+line are the maintainer's, as was the decision that the file should answer the slop question
+at all rather than ignore it.
+
+**AI (Claude Code).** Reviewed and revised it. Cut a dated pop-culture reference that would
+have misfired on the readers the argument is aimed at, and rewrote the second half to point
+at this file's accounting instead of resting on the analogy. The maintainer chose the final
+wording and made it standing practice for all AI.md files.

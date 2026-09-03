@@ -12,11 +12,11 @@ $ rsync -a /data /backup || ha-notify --critical "nightly backup failed: rsync e
 
 ## Install
 
-This package is **not on PyPI** and is not going there — `uv tool install ha-notify` will
-fail. Install from the private repository:
+This package is **not published to PyPI** — `uv tool install ha-notify` will fail. Install
+from the repository:
 
 ```console
-$ uv tool install git+ssh://git@github.com/seantrue/ha-notify.git@v0.2.0
+$ uv tool install git+https://github.com/seantrue/ha-notify.git@v0.2.0
 ```
 
 ...or from a wheel built locally, which is how the maintainer's hosts are updated:
@@ -46,6 +46,7 @@ A long-lived access token is required. Create one in Home Assistant under
 | `HA_URL` | Base URL of Home Assistant | `http://homeassistant.lan:8123` |
 | `HA_NOTIFY_TARGET` | Notify service to send to | `mobile_app_iphone` |
 | `HA_NOTIFY_INTERRUPTION_LEVEL` | Default iOS delivery priority | *(the app's own setting)* |
+| `HA_NOTIFY_ALL_EXCLUDE` | Extra services `-T all` should skip, comma-separated | *(none)* |
 
 Precedence is **flag → environment → built-in default**.
 
@@ -71,11 +72,36 @@ a bare `400: Bad Request` with no explanation, so ask instead:
 $ ha-notify --list-targets
 notify.lg_tv
 notify.mobile_app_alex_s_iphone
-notify.mobile_app_alex_s_ipad
+notify.notify
 notify.persistent_notification
 ```
 
 Set the one you want as `HA_NOTIFY_TARGET`, or pass `-T`. The `notify.` prefix is optional.
+
+`--list-targets` is deliberately unfiltered — it shows everything Home Assistant offers,
+including the aggregate services, because it is the command you reach for when a target you
+expected is missing.
+
+### Sending to everything
+
+`-T all` expands to every notify service on the instance, which is what you want when the
+alert matters more than the device — the power is out, the house is on fire, nobody is going
+to be looking at one particular phone:
+
+```console
+$ ha-notify --critical -T all "sump pump has stopped"
+```
+
+The services that are aggregates rather than a device — `notify.notify`,
+`notify.persistent_notification`, `notify.send_message` — are skipped, because sending through
+them would double up on every phone. Anything else you never want paged (a wall-mounted kiosk,
+a test target) goes in `HA_NOTIFY_ALL_EXCLUDE`, with or without the `notify.` prefix:
+
+```sh
+HA_NOTIFY_ALL_EXCLUDE=mobile_app_kiosk,notify.lg_tv
+```
+
+Delivery is attempted for every target even if one fails; see [Exit codes](#exit-codes).
 
 ## Usage
 
@@ -88,7 +114,7 @@ ha-notify [-h] [-t TITLE] [-T TARGET] [--interruption-level LEVEL]
 | Flag | Meaning |
 | --- | --- |
 | `-t`, `--title` | Notification title (default: this machine's short hostname) |
-| `-T`, `--target` | Notify service, with or without the `notify.` prefix |
+| `-T`, `--target` | Notify service, with or without the `notify.` prefix; `all` for every device |
 | `--interruption-level` | iOS delivery priority: `passive`, `active`, `time-sensitive` |
 | `--time-sensitive` | Shorthand for `--interruption-level time-sensitive` |
 | `-c`, `--critical` | Send as an iOS critical alert (bypasses silent / DND) |
@@ -164,6 +190,11 @@ fi
 Unreachable hosts and timeouts print a single line rather than a traceback, because a stack
 trace in cron mail is noise.
 
+With `-T all`, one failing target does not stop the others: every target is attempted, each
+failure is reported on stderr as it happens, and a `sent to 2 of 3 targets` summary follows.
+The exit code is `1` if *any* target failed, so a zero exit means every device was reached. If
+`all` expands to no targets, that is a `1` as well rather than a silent success.
+
 ## Example: cron
 
 Cron does not read `.bashrc`, so the token has to reach the job some other way. Either `cd`
@@ -191,6 +222,33 @@ Use an absolute path to `ha-notify`: cron's `PATH` usually excludes `~/.local/bi
 the same file from `~/.bashrc` gives interactive shells the same configuration.
 
 Without either, the command exits `2` with `HA_TOKEN not set`, rather than failing silently.
+
+## Alternatives
+
+**[`hass-cli`](https://github.com/home-assistant-ecosystem/home-assistant-cli)**
+(`pip install homeassistant-cli`) is the general-purpose Home Assistant CLI — entities,
+states, areas, templates, and service calls — and it is the right tool if you want to *drive*
+Home Assistant from a terminal. It can send a notification:
+
+```console
+$ hass-cli service call notify.mobile_app_x --arguments message="backup failed"
+```
+
+Two things make it an awkward fit for the job `ha-notify` does. Its `--arguments` take flat
+`key=value` pairs, so the nested `data.push.sound.critical` structure an iOS critical alert
+requires is not straightforward to express — and critical alerts are the entire reason this
+tool exists. And as of 1.0.0 it requires **Python 3.13+**, which rules it out on the older
+boxes that tend to be the ones running the backup scripts. `ha-notify` supports 3.10+ and
+depends only on `httpx`.
+
+Otherwise the state of the art for this niche is a hand-rolled `curl` one-liner pasted out of
+a blog post. That works — the prototype behind this package was exactly that — but it gives
+you no `--list-targets` when Home Assistant answers a mistyped target with a bare
+`400: Bad Request`, no distinction between "the alert failed to send" and "you invoked it
+wrong", and a stack of shell quoting in your crontab.
+
+If you are not tied to Home Assistant at all, [ntfy](https://ntfy.sh/) solves the same
+"notify me from a shell script" problem with its own server and apps.
 
 ## Development
 

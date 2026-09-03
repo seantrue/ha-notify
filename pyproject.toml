@@ -21,6 +21,11 @@ dependencies = [
     "httpx>=0.28.1",
 ]
 
+[project.urls]
+Homepage = "https://github.com/seantrue/ha-notify"
+Repository = "https://github.com/seantrue/ha-notify"
+Issues = "https://github.com/seantrue/ha-notify/issues"
+
 [project.scripts]
 ha-notify = "ha_notify.cli:run"
 
